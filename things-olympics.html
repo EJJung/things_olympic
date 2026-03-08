@@ -133,14 +133,37 @@ async function fetchViaAllOrigins(url) {
   return parseOGMeta(contents, url);
 }
 
-/* ── fetchMeta: tries Microlink first, falls back to allorigins ── */
+/* ── Option B: Supabase Edge Function (server-side, no CORS, browser UA) ── */
+async function fetchViaEdgeFunction(url) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/fetch-meta`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${SUPABASE_ANON}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ url }),
+    signal: AbortSignal.timeout(14000),
+  });
+  if (!res.ok) throw new Error('Edge fn HTTP ' + res.status);
+  const data = await res.json();
+  if (!data.success) throw new Error('Edge fn: ' + data.error);
+  if (!data.name)    throw new Error('Edge fn: empty name');
+  return { name: data.name, image: data.image || '', description: data.description || '', url };
+}
+
+/* ── fetchMeta: Edge Function → Microlink → allorigins ── */
 async function fetchMeta(rawUrl) {
   const url = /^https?:\/\//.test(rawUrl) ? rawUrl : 'https://' + rawUrl;
   try {
-    return await fetchViaMicrolink(url);
-  } catch (microlinkErr) {
-    console.warn('[fetchMeta] Microlink failed, trying allorigins:', microlinkErr.message);
-    return await fetchViaAllOrigins(url);
+    return await fetchViaEdgeFunction(url);
+  } catch (edgeErr) {
+    console.warn('[fetchMeta] Edge fn failed, trying Microlink:', edgeErr.message);
+    try {
+      return await fetchViaMicrolink(url);
+    } catch (microlinkErr) {
+      console.warn('[fetchMeta] Microlink failed, trying allorigins:', microlinkErr.message);
+      return await fetchViaAllOrigins(url);
+    }
   }
 }
 
@@ -450,6 +473,35 @@ function App() {
   async function removeItem(id) {
     await sb.from('items').delete().eq('id', id);
     setItems(p => p.filter(i => i.id !== id));
+  }
+
+  /* ── Inline edit state ── */
+  const [editingId,   setEditingId]   = useState(null);
+  const [editDraft,   setEditDraft]   = useState({});
+  const [editImgPrev, setEditImgPrev] = useState('');
+  const [editSaving,  setEditSaving]  = useState(false);
+  const editFileRef = useRef(null);
+
+  function openEdit(item) {
+    setEditingId(item.id);
+    setEditDraft({ name: item.name, description: item.description || '', url: item.url || '', image: item.image || '' });
+    setEditImgPrev(item.image || '');
+  }
+  function closeEdit() { setEditingId(null); setEditDraft({}); setEditImgPrev(''); }
+
+  async function handleEditImageFile(file) {
+    try { const b64 = await resizeImage(file); setEditImgPrev(b64); setEditDraft(p => ({ ...p, image: b64 })); }
+    catch {}
+  }
+
+  async function saveItem(id) {
+    if (!editDraft.name.trim()) return;
+    setEditSaving(true);
+    const patch = { name: editDraft.name.trim(), description: editDraft.description.trim(), url: editDraft.url.trim(), image: editDraft.image };
+    const { data } = await sb.from('items').update(patch).eq('id', id).select().single();
+    if (data) { setItems(p => p.map(i => i.id === id ? data : i)); showToast('✓ Saved!'); }
+    setEditSaving(false);
+    closeEdit();
   }
 
   function startTournament() {
@@ -813,16 +865,72 @@ function App() {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {items.map(item => (
-                <div key={item.id} className="fade-in" style={{ background: '#fff', borderRadius: 13, padding: '11px 14px', display: 'flex', alignItems: 'center', gap: 11, boxShadow: '0 1px 8px rgba(0,0,0,0.05)' }}>
-                  <Avatar item={item} size={44} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, color: '#111', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.88rem' }}>{item.name}</div>
-                    {item.url
-                      ? <a href={item.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.69rem', color: '#0081C8', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.url.slice(0, 50)}{item.url.length > 50 ? '…' : ''}</a>
-                      : item.description && <p style={{ fontSize: '0.69rem', color: '#bbb', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', margin: 0 }}>{item.description}</p>
-                    }
-                  </div>
-                  <button onClick={() => removeItem(item.id)} style={{ width: 26, height: 26, borderRadius: '50%', background: '#fee2e2', color: '#EE334E', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '0.68rem', fontWeight: 700 }}>✕</button>
+                <div key={item.id} className="fade-in" style={{ background: '#fff', borderRadius: 13, boxShadow: '0 1px 8px rgba(0,0,0,0.05)', overflow: 'hidden' }}>
+                  {editingId === item.id ? (
+                    /* ── Inline edit form ── */
+                    <div style={{ padding: '14px 14px 12px' }}>
+                      {/* Image preview + swap */}
+                      <div style={{ display: 'flex', gap: 10, marginBottom: 10, alignItems: 'flex-start' }}>
+                        <div style={{ position: 'relative', flexShrink: 0 }}>
+                          {editImgPrev
+                            ? <img src={editImgPrev} alt="" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 8, display: 'block' }} />
+                            : <div style={{ width: 56, height: 56, borderRadius: 8, background: colorFor(editDraft.name || '?'), display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, fontSize: '1.3rem' }}>{(editDraft.name?.[0] || '?').toUpperCase()}</div>
+                          }
+                          <button onClick={() => editFileRef.current?.click()} title="Change image" style={{ position: 'absolute', bottom: -4, right: -4, width: 20, height: 20, borderRadius: '50%', background: '#0081C8', color: '#fff', border: 'none', cursor: 'pointer', fontSize: '0.6rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>📷</button>
+                          <input ref={editFileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { if (e.target.files?.[0]) handleEditImageFile(e.target.files[0]); e.target.value=''; }} />
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <input
+                            value={editDraft.name || ''}
+                            onChange={e => setEditDraft(p => ({ ...p, name: e.target.value }))}
+                            placeholder="Name *"
+                            style={{ width: '100%', padding: '6px 9px', border: '1.5px solid #e0e0e0', borderRadius: 7, fontSize: '0.88rem', fontWeight: 600, boxSizing: 'border-box', outline: 'none' }}
+                          />
+                        </div>
+                      </div>
+                      {/* Image URL input when no upload */}
+                      {!editImgPrev && (
+                        <input
+                          value={editDraft.image || ''}
+                          onChange={e => setEditDraft(p => ({ ...p, image: e.target.value }))}
+                          placeholder="Image URL (optional)"
+                          style={{ width: '100%', padding: '6px 9px', border: '1.5px solid #e0e0e0', borderRadius: 7, fontSize: '0.8rem', boxSizing: 'border-box', marginBottom: 7, outline: 'none' }}
+                        />
+                      )}
+                      <input
+                        value={editDraft.description || ''}
+                        onChange={e => setEditDraft(p => ({ ...p, description: e.target.value }))}
+                        placeholder="Description (optional)"
+                        style={{ width: '100%', padding: '6px 9px', border: '1.5px solid #e0e0e0', borderRadius: 7, fontSize: '0.8rem', boxSizing: 'border-box', marginBottom: 7, outline: 'none' }}
+                      />
+                      <input
+                        value={editDraft.url || ''}
+                        onChange={e => setEditDraft(p => ({ ...p, url: e.target.value }))}
+                        placeholder="URL (optional)"
+                        style={{ width: '100%', padding: '6px 9px', border: '1.5px solid #e0e0e0', borderRadius: 7, fontSize: '0.8rem', boxSizing: 'border-box', marginBottom: 10, outline: 'none' }}
+                      />
+                      <div style={{ display: 'flex', gap: 7, justifyContent: 'flex-end' }}>
+                        <button onClick={closeEdit} style={{ padding: '6px 14px', borderRadius: 7, border: '1.5px solid #e0e0e0', background: '#fff', color: '#666', fontSize: '0.8rem', cursor: 'pointer', fontWeight: 600 }}>Cancel</button>
+                        <button onClick={() => saveItem(item.id)} disabled={editSaving || !editDraft.name?.trim()} style={{ padding: '6px 16px', borderRadius: 7, border: 'none', background: editSaving || !editDraft.name?.trim() ? '#ccc' : '#0081C8', color: '#fff', fontSize: '0.8rem', cursor: editSaving || !editDraft.name?.trim() ? 'not-allowed' : 'pointer', fontWeight: 700 }}>
+                          {editSaving ? 'Saving…' : 'Save'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* ── Normal row ── */
+                    <div style={{ padding: '11px 14px', display: 'flex', alignItems: 'center', gap: 11 }}>
+                      <Avatar item={item} size={44} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, color: '#111', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.88rem' }}>{item.name}</div>
+                        {item.url
+                          ? <a href={item.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.69rem', color: '#0081C8', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.url.slice(0, 50)}{item.url.length > 50 ? '…' : ''}</a>
+                          : item.description && <p style={{ fontSize: '0.69rem', color: '#bbb', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', margin: 0 }}>{item.description}</p>
+                        }
+                      </div>
+                      <button onClick={() => openEdit(item)} title="Edit" style={{ width: 26, height: 26, borderRadius: '50%', background: '#e8f4ff', color: '#0081C8', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '0.78rem' }}>✎</button>
+                      <button onClick={() => removeItem(item.id)} style={{ width: 26, height: 26, borderRadius: '50%', background: '#fee2e2', color: '#EE334E', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '0.68rem', fontWeight: 700 }}>✕</button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
