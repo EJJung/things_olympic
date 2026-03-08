@@ -57,25 +57,91 @@ function colorFor(s = '') {
   return PALETTE[Math.abs(h) % PALETTE.length];
 }
 
+/* ── Metadata parsing: tries multiple tag formats ── */
 function parseOGMeta(html, url) {
   try {
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    const q = s => doc.querySelector(s)?.getAttribute('content') || '';
-    let image = q('meta[property="og:image"]') || q('meta[name="og:image"]') || '';
-    if (image && !/^https?:\/\//.test(image)) { try { image = new URL(image, url).href; } catch {} }
-    const name = (q('meta[property="og:title"]') || q('meta[name="og:title"]') || doc.title || new URL(url).hostname).trim().slice(0, 100);
-    const description = (q('meta[property="og:description"]') || q('meta[name="description"]') || '').trim().slice(0, 200);
-    return { name, image, description, url };
-  } catch { return { name: url.slice(0, 60), image: '', description: '', url }; }
+    const q  = s => doc.querySelector(s)?.getAttribute('content')?.trim() || '';
+    const qs = s => doc.querySelector(s)?.textContent?.trim() || '';
+
+    // 1) Try JSON-LD (schema.org Product / Article / etc.)
+    let jsonldName = '', jsonldImage = '', jsonldDesc = '';
+    doc.querySelectorAll('script[type="application/ld+json"]').forEach(el => {
+      try {
+        const data = JSON.parse(el.textContent);
+        const nodes = Array.isArray(data) ? data : (data['@graph'] || [data]);
+        nodes.forEach(n => {
+          if (!jsonldName && n.name)        jsonldName  = String(n.name).trim().slice(0, 120);
+          if (!jsonldImage && n.image)      jsonldImage = (typeof n.image === 'string' ? n.image : n.image?.url || n.image?.[0]?.url || '');
+          if (!jsonldDesc  && n.description) jsonldDesc = String(n.description).trim().slice(0, 200);
+        });
+      } catch {}
+    });
+
+    // 2) OG tags
+    let image = q('meta[property="og:image"]') || q('meta[property="og:image:url"]')
+              || q('meta[name="og:image"]')     || '';
+
+    // 3) Twitter card fallbacks
+    const twitterImage = q('meta[name="twitter:image"]') || q('meta[name="twitter:image:src"]') || '';
+    const twitterTitle = q('meta[name="twitter:title"]') || '';
+    const twitterDesc  = q('meta[name="twitter:description"]') || '';
+
+    // 4) Resolve relative image URL
+    const rawImage = image || twitterImage || jsonldImage || '';
+    let finalImage = rawImage;
+    if (finalImage && !/^https?:\/\//.test(finalImage)) {
+      try { finalImage = new URL(finalImage, url).href; } catch {}
+    }
+
+    // 5) Pick best name / description in priority order
+    const name = (
+      q('meta[property="og:title"]') || q('meta[name="og:title"]') ||
+      twitterTitle || jsonldName ||
+      qs('h1') || doc.title ||
+      new URL(url).hostname
+    ).trim().slice(0, 120);
+
+    const description = (
+      q('meta[property="og:description"]') || q('meta[name="description"]') ||
+      twitterDesc || jsonldDesc || ''
+    ).trim().slice(0, 220);
+
+    return { name, image: finalImage, description, url };
+  } catch { return { name: new URL(url).hostname, image: '', description: '', url }; }
 }
 
+/* ── Primary: Microlink API (handles JS-rendered sites, clean JSON) ── */
+async function fetchViaMicrolink(url) {
+  const res = await fetch(`https://api.microlink.io/?url=${encodeURIComponent(url)}&palette=false&audio=false&video=false&iframe=false`, { signal: AbortSignal.timeout(8000) });
+  if (!res.ok) throw new Error('Microlink HTTP ' + res.status);
+  const { status, data } = await res.json();
+  if (status !== 'success' || !data) throw new Error('Microlink no data');
+  const name  = (data.title  || '').trim().slice(0, 120);
+  const image = data.image?.url || data.logo?.url || '';
+  const description = (data.description || '').trim().slice(0, 220);
+  if (!name) throw new Error('Microlink: empty title');
+  return { name, image, description, url };
+}
+
+/* ── Fallback: allorigins proxy + local HTML parser ── */
+async function fetchViaAllOrigins(url) {
+  const res = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error('allorigins HTTP error');
+  const { contents } = await res.json();
+  if (!contents) throw new Error('allorigins: empty response');
+  return parseOGMeta(contents, url);
+}
+
+/* ── fetchMeta: tries Microlink first, falls back to allorigins ── */
 async function fetchMeta(rawUrl) {
   const url = /^https?:\/\//.test(rawUrl) ? rawUrl : 'https://' + rawUrl;
-  const res = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`);
-  if (!res.ok) throw new Error('HTTP error');
-  const { contents } = await res.json();
-  if (!contents) throw new Error('Empty response');
-  return parseOGMeta(contents, url);
+  try {
+    return await fetchViaMicrolink(url);
+  } catch (microlinkErr) {
+    console.warn('[fetchMeta] Microlink failed, trying allorigins:', microlinkErr.message);
+    return await fetchViaAllOrigins(url);
+  }
 }
 
 /* ── Image resize (client-side, for upload) ── */
