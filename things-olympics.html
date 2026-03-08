@@ -4,32 +4,43 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Things I Want Olympics</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f7; }
+  input { font-family: inherit; }
   input:focus { outline: 2px solid #0081C8; outline-offset: 1px; }
-  button:active { transform: scale(0.97) !important; }
+  button { font-family: inherit; }
+  button:active { opacity: 0.85; }
   a { color: inherit; }
-  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-  @keyframes pop { 0% { transform: scale(0.9); opacity: 0; } 60% { transform: scale(1.04); } 100% { transform: scale(1); opacity: 1; } }
+  @keyframes fadeIn  { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes pop     { 0% { transform: scale(0.9); opacity: 0; } 60% { transform: scale(1.04); } 100% { transform: scale(1); opacity: 1; } }
   @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-  .fade-in { animation: fadeIn 0.3s ease; }
-  .pop-in { animation: pop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
-  .slide-up { animation: slideUp 0.4s ease; }
-  ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+  @keyframes spin    { to { transform: rotate(360deg); } }
+  .fade-in  { animation: fadeIn  0.3s ease both; }
+  .pop-in   { animation: pop    0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+  .slide-up { animation: slideUp 0.4s ease both; }
+  .spin     { animation: spin 0.8s linear infinite; display: inline-block; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState } = React;
+const { useState, useEffect } = React;
+
+/* ── Supabase ── */
+const SUPABASE_URL  = 'https://wxljqmcztgmzuncxzwrj.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4bGpxbWN6dGdtenVuY3h6d3JqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI5MzU3OTEsImV4cCI6MjA4ODUxMTc5MX0.BtezYPq_VaZuCWJ1LBF3kkSxbBOMFDtZ82hd4UyaKGE';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
 /* ── Helpers ── */
-const uid = () => Math.random().toString(36).slice(2, 10);
-const PALETTE = ['#0081C8', '#EE334E', '#00A651', '#FCB131', '#9333EA', '#F97316', '#0891B2', '#BE185D'];
+const PALETTE = ['#0081C8','#EE334E','#00A651','#FCB131','#9333EA','#F97316','#0891B2','#BE185D'];
 function colorFor(s = '') {
   let h = 0;
   for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0;
@@ -41,15 +52,11 @@ function parseOGMeta(html, url) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const q = s => doc.querySelector(s)?.getAttribute('content') || '';
     let image = q('meta[property="og:image"]') || q('meta[name="og:image"]') || '';
-    if (image && !/^https?:\/\//.test(image)) {
-      try { image = new URL(image, url).href; } catch {}
-    }
+    if (image && !/^https?:\/\//.test(image)) { try { image = new URL(image, url).href; } catch {} }
     const name = (q('meta[property="og:title"]') || q('meta[name="og:title"]') || doc.title || new URL(url).hostname).trim().slice(0, 100);
     const description = (q('meta[property="og:description"]') || q('meta[name="description"]') || '').trim().slice(0, 200);
     return { name, image, description, url };
-  } catch {
-    return { name: url.slice(0, 60), image: '', description: '', url };
-  }
+  } catch { return { name: url.slice(0, 60), image: '', description: '', url }; }
 }
 
 async function fetchMeta(rawUrl) {
@@ -58,7 +65,7 @@ async function fetchMeta(rawUrl) {
   if (!res.ok) throw new Error('HTTP error');
   const { contents } = await res.json();
   if (!contents) throw new Error('Empty response');
-  return { ...parseOGMeta(contents, url), id: uid() };
+  return parseOGMeta(contents, url);
 }
 
 /* ── Tournament Engine ── */
@@ -66,40 +73,27 @@ function startTourn(items) {
   const shuffled = [...items].sort(() => Math.random() - 0.5);
   return advance({ queue: shuffled, pending: [], losers: [], round: 1, played: 0, match: null, done: false, champ: null });
 }
-
 function advance(t) {
-  if (t.queue.length >= 2) {
-    const [a, b, ...rest] = t.queue;
-    return { ...t, queue: rest, match: [a, b] };
-  }
+  if (t.queue.length >= 2) { const [a, b, ...rest] = t.queue; return { ...t, queue: rest, match: [a, b] }; }
   const winners = t.queue.length === 1 ? [...t.pending, t.queue[0]] : [...t.pending];
-  if (winners.length <= 1) {
-    return { ...t, queue: [], pending: [], match: null, done: true, champ: winners[0] ?? null };
-  }
+  if (winners.length <= 1) return { ...t, queue: [], pending: [], match: null, done: true, champ: winners[0] ?? null };
   return advance({ ...t, queue: winners, pending: [], round: t.round + 1 });
 }
-
 function choose(t, idx) {
-  const [a, b] = t.match;
-  const win = idx === 0 ? a : b;
-  const lose = idx === 0 ? b : a;
+  const [a, b] = t.match, win = idx === 0 ? a : b, lose = idx === 0 ? b : a;
   return advance({ ...t, pending: [...t.pending, win], losers: [lose, ...t.losers], played: t.played + 1, match: null });
 }
-
 function getRanking(t) { return [t.champ, ...t.losers].filter(Boolean); }
 
 /* ── Avatar ── */
 function Avatar({ item, size = 48 }) {
   const [err, setErr] = useState(false);
-  const bg = colorFor(item.name);
-  const r = Math.round(size * 0.22);
-  if (!item.image || err) {
-    return (
-      <div style={{ width: size, height: size, borderRadius: r, background: `linear-gradient(135deg, ${bg}, ${bg}aa)`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, fontSize: Math.round(size * 0.42), flexShrink: 0, userSelect: 'none' }}>
-        {(item.name[0] || '?').toUpperCase()}
-      </div>
-    );
-  }
+  const bg = colorFor(item.name), r = Math.round(size * 0.22);
+  if (!item.image || err) return (
+    <div style={{ width: size, height: size, borderRadius: r, background: `linear-gradient(135deg, ${bg}, ${bg}aa)`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, fontSize: Math.round(size * 0.42), flexShrink: 0, userSelect: 'none' }}>
+      {(item.name[0] || '?').toUpperCase()}
+    </div>
+  );
   return <img src={item.image} alt={item.name} onError={() => setErr(true)} style={{ width: size, height: size, objectFit: 'cover', borderRadius: r, flexShrink: 0, display: 'block' }} />;
 }
 
@@ -109,45 +103,21 @@ function VsCard({ item, onPick }) {
   const [err, setErr] = useState(false);
   const bg = colorFor(item.name);
   return (
-    <div
-      onClick={onPick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        flex: 1, minWidth: 0, borderRadius: 18, overflow: 'hidden', cursor: 'pointer',
-        background: '#fff',
-        boxShadow: hover ? '0 24px 56px rgba(0,0,0,0.32)' : '0 6px 28px rgba(0,0,0,0.16)',
-        transform: hover ? 'translateY(-8px) scale(1.025)' : 'translateY(0) scale(1)',
-        transition: 'all 0.22s cubic-bezier(0.34, 1.4, 0.64, 1)',
-        border: `2.5px solid ${hover ? '#FCB131' : 'rgba(255,255,255,0.12)'}`,
-      }}
-    >
+    <div onClick={onPick} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      style={{ flex: 1, minWidth: 0, borderRadius: 18, overflow: 'hidden', cursor: 'pointer', background: '#fff', boxShadow: hover ? '0 24px 56px rgba(0,0,0,0.32)' : '0 6px 28px rgba(0,0,0,0.16)', transform: hover ? 'translateY(-8px) scale(1.025)' : 'translateY(0) scale(1)', transition: 'all 0.22s cubic-bezier(0.34,1.4,0.64,1)', border: `2.5px solid ${hover ? '#FCB131' : 'rgba(255,255,255,0.12)'}` }}>
       <div style={{ width: '100%', paddingBottom: '65%', position: 'relative', background: '#1a1a2e' }}>
         {item.image && !err
           ? <img src={item.image} alt={item.name} onError={() => setErr(true)} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
-          : <div style={{ position: 'absolute', inset: 0, background: `linear-gradient(135deg, ${bg}cc, ${bg}55)`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 72, fontWeight: 800 }}>
-              {(item.name[0] || '?').toUpperCase()}
-            </div>
+          : <div style={{ position: 'absolute', inset: 0, background: `linear-gradient(135deg, ${bg}cc, ${bg}55)`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 72, fontWeight: 800 }}>{(item.name[0] || '?').toUpperCase()}</div>
         }
         {hover && <div style={{ position: 'absolute', inset: 0, background: 'rgba(252,177,49,0.12)' }} />}
       </div>
       <div style={{ padding: '16px 18px 10px' }}>
-        <div style={{ fontWeight: 700, fontSize: '1.05rem', color: '#111', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', lineHeight: 1.35, minHeight: '2.7rem' }}>
-          {item.name}
-        </div>
-        {item.description &&
-          <div style={{ color: '#777', fontSize: '0.8rem', marginTop: 6, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', lineHeight: 1.4 }}>
-            {item.description}
-          </div>
-        }
+        <div style={{ fontWeight: 700, fontSize: '1.05rem', color: '#111', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', lineHeight: 1.35, minHeight: '2.7rem' }}>{item.name}</div>
+        {item.description && <div style={{ color: '#777', fontSize: '0.8rem', marginTop: 6, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{item.description}</div>}
       </div>
       <div style={{ padding: '10px 18px 18px' }}>
-        <div style={{
-          background: hover ? 'linear-gradient(135deg, #FCB131, #EE334E)' : 'linear-gradient(135deg, #0d1b4b, #0081C8)',
-          color: '#fff', textAlign: 'center', padding: '11px 8px', borderRadius: 11,
-          fontWeight: 700, fontSize: '0.9rem', letterSpacing: 0.5,
-          transition: 'background 0.2s',
-        }}>
+        <div style={{ background: hover ? 'linear-gradient(135deg, #FCB131, #EE334E)' : 'linear-gradient(135deg, #0d1b4b, #0081C8)', color: '#fff', textAlign: 'center', padding: '11px 8px', borderRadius: 11, fontWeight: 700, fontSize: '0.9rem', transition: 'background 0.2s' }}>
           {hover ? '⚡ PICK THIS!' : '👆 Pick This'}
         </div>
       </div>
@@ -155,50 +125,170 @@ function VsCard({ item, onPick }) {
   );
 }
 
+/* ── Spinner ── */
+function Spinner({ size = 20, color = '#0081C8' }) {
+  return <div className="spin" style={{ width: size, height: size, border: `2.5px solid ${color}33`, borderTopColor: color, borderRadius: '50%' }} />;
+}
+
+/* ── Auth Screen ── */
+function AuthScreen() {
+  const [mode, setMode] = useState('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [signupDone, setSignupDone] = useState(false);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (password.length < 6) { setError('Password must be at least 6 characters.'); return; }
+    setLoading(true); setError('');
+    try {
+      if (mode === 'signup') {
+        const { data, error: err } = await sb.auth.signUp({ email, password });
+        if (err) throw err;
+        if (!data.session) setSignupDone(true); // email confirmation required
+      } else {
+        const { error: err } = await sb.auth.signInWithPassword({ email, password });
+        if (err) throw err;
+      }
+    } catch (err) {
+      const msg = err.message || 'Something went wrong.';
+      setError(msg.includes('Invalid login') ? 'Incorrect email or password.' : msg);
+    } finally { setLoading(false); }
+  }
+
+  if (signupDone) return (
+    <div style={{ minHeight: '100vh', background: 'linear-gradient(160deg, #06061a, #0d1b4b, #1a062e)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div className="pop-in" style={{ background: '#fff', borderRadius: 20, padding: '36px 32px', maxWidth: 400, width: '100%', textAlign: 'center' }}>
+        <div style={{ fontSize: '3rem', marginBottom: 12 }}>📬</div>
+        <h2 style={{ fontWeight: 800, fontSize: '1.3rem', color: '#111', marginBottom: 8 }}>Check your email</h2>
+        <p style={{ color: '#666', fontSize: '0.9rem', lineHeight: 1.6 }}>We sent a confirmation link to <strong>{email}</strong>. Click it to activate your account, then come back to log in.</p>
+        <button onClick={() => { setSignupDone(false); setMode('login'); }} style={{ marginTop: 20, padding: '10px 24px', background: '#0081C8', color: '#fff', border: 'none', borderRadius: 10, fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem' }}>
+          Back to Login
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight: '100vh', background: 'linear-gradient(160deg, #06061a, #0d1b4b, #1a062e)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      {/* Logo */}
+      <div className="slide-up" style={{ textAlign: 'center', marginBottom: 28, color: '#fff' }}>
+        <div style={{ fontSize: '2.8rem', marginBottom: 6 }}>🏅</div>
+        <h1 style={{ fontWeight: 900, fontSize: '1.7rem', letterSpacing: -0.5 }}>Things I Want Olympics</h1>
+        <p style={{ opacity: 0.55, fontSize: '0.85rem', marginTop: 5 }}>Battle your wishlist. Crown a champion.</p>
+      </div>
+
+      {/* Card */}
+      <div className="pop-in" style={{ background: '#fff', borderRadius: 20, padding: '28px 28px', width: '100%', maxWidth: 380, boxShadow: '0 24px 64px rgba(0,0,0,0.4)' }}>
+        {/* Tab toggle */}
+        <div style={{ display: 'flex', background: '#f3f4f6', borderRadius: 10, padding: 4, marginBottom: 22 }}>
+          {[['login','Log In'],['signup','Sign Up']].map(([key,label]) => (
+            <button key={key} onClick={() => { setMode(key); setError(''); }} style={{ flex: 1, padding: '8px', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: '0.88rem', transition: 'all 0.15s', background: mode === key ? '#fff' : 'transparent', color: mode === key ? '#0081C8' : '#888', boxShadow: mode === key ? '0 2px 8px rgba(0,0,0,0.09)' : 'none' }}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <input type="email" required placeholder="Email address" value={email} onChange={e => setEmail(e.target.value)}
+            style={{ padding: '11px 14px', border: '1.5px solid #e5e7eb', borderRadius: 10, fontSize: '0.9rem' }} />
+          <input type="password" required placeholder="Password (min. 6 characters)" value={password} onChange={e => setPassword(e.target.value)}
+            style={{ padding: '11px 14px', border: '1.5px solid #e5e7eb', borderRadius: 10, fontSize: '0.9rem' }} />
+
+          {error && <p style={{ color: '#EE334E', fontSize: '0.82rem', marginTop: -4 }}>{error}</p>}
+
+          <button type="submit" disabled={loading} style={{ padding: '12px', background: 'linear-gradient(135deg, #0d1b4b, #0081C8)', color: '#fff', border: 'none', borderRadius: 11, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.7 : 1, fontSize: '0.95rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 4 }}>
+            {loading ? <><Spinner size={16} color="#fff" /> {mode === 'login' ? 'Logging in…' : 'Creating account…'}</> : mode === 'login' ? '🔑 Log In' : '🚀 Create Account'}
+          </button>
+        </form>
+
+        <p style={{ textAlign: 'center', fontSize: '0.78rem', color: '#bbb', marginTop: 16 }}>
+          {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
+          <button onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setError(''); }} style={{ background: 'none', border: 'none', color: '#0081C8', cursor: 'pointer', fontWeight: 600, fontSize: '0.78rem' }}>
+            {mode === 'login' ? 'Sign up' : 'Log in'}
+          </button>
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /* ── Main App ── */
 function App() {
-  const [screen, setScreen] = useState('collection');
-  const [items, setItems] = useState([]);
-  const [tab, setTab] = useState('url');
-  const [urlVal, setUrlVal] = useState('');
+  const [user, setUser]               = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [screen, setScreen]           = useState('collection');
+  const [items, setItems]             = useState([]);
+  const [itemsLoading, setItemsLoading] = useState(false);
+
+  // Add-item form state
+  const [tab, setTab]         = useState('url');
+  const [urlVal, setUrlVal]   = useState('');
   const [fetching, setFetching] = useState(false);
   const [fetchErr, setFetchErr] = useState('');
   const [preview, setPreview] = useState(null);
-  const [form, setForm] = useState({ name: '', image: '', description: '', url: '' });
-  const [tourn, setTourn] = useState(null);
+  const [form, setForm]       = useState({ name: '', image: '', description: '', url: '' });
+  const [saving, setSaving]   = useState(false);
+
+  // Tournament state
+  const [tourn, setTourn]     = useState(null);
   const [picking, setPicking] = useState(false);
   const [matchKey, setMatchKey] = useState(0);
+
+  /* Auth listener */
+  useEffect(() => {
+    sb.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+    const { data: { subscription } } = sb.auth.onAuthStateChange((_e, session) => {
+      setUser(session?.user ?? null);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  /* Load items whenever user changes */
+  useEffect(() => {
+    if (!user) { setItems([]); return; }
+    setItemsLoading(true);
+    sb.from('items').select('*').order('created_at', { ascending: false })
+      .then(({ data }) => { setItems(data || []); setItemsLoading(false); });
+  }, [user]);
 
   async function onFetch() {
     if (!urlVal.trim() || fetching) return;
     setFetching(true); setFetchErr(''); setPreview(null);
-    try {
-      const meta = await fetchMeta(urlVal.trim());
-      setPreview(meta);
-    } catch {
-      setFetchErr("Couldn't load that URL — try manual entry instead.");
-    } finally { setFetching(false); }
+    try { setPreview(await fetchMeta(urlVal.trim())); }
+    catch { setFetchErr("Couldn't load that URL — try manual entry instead."); }
+    finally { setFetching(false); }
   }
 
-  function addPreview() {
-    if (!preview) return;
-    setItems(p => [...p, preview]);
-    setPreview(null); setUrlVal('');
+  async function addPreview() {
+    if (!preview || !user) return;
+    setSaving(true);
+    const { data } = await sb.from('items').insert({ user_id: user.id, name: preview.name, image: preview.image, description: preview.description, url: preview.url }).select().single();
+    if (data) setItems(p => [data, ...p]);
+    setPreview(null); setUrlVal(''); setSaving(false);
   }
 
-  function addManual() {
-    if (!form.name.trim()) return;
-    setItems(p => [...p, { ...form, id: uid() }]);
-    setForm({ name: '', image: '', description: '', url: '' });
+  async function addManual() {
+    if (!form.name.trim() || !user) return;
+    setSaving(true);
+    const { data } = await sb.from('items').insert({ user_id: user.id, name: form.name, image: form.image, description: form.description, url: form.url }).select().single();
+    if (data) setItems(p => [data, ...p]);
+    setForm({ name: '', image: '', description: '', url: '' }); setSaving(false);
   }
 
-  function removeItem(id) { setItems(p => p.filter(i => i.id !== id)); }
+  async function removeItem(id) {
+    await sb.from('items').delete().eq('id', id);
+    setItems(p => p.filter(i => i.id !== id));
+  }
 
   function startTournament() {
     if (items.length < 2) return;
-    setTourn(startTourn(items));
-    setMatchKey(0);
-    setScreen('tournament');
+    setTourn(startTourn(items)); setMatchKey(0); setScreen('tournament');
   }
 
   function onPick(idx) {
@@ -206,20 +296,31 @@ function App() {
     setPicking(true);
     setTimeout(() => {
       const next = choose(tourn, idx);
-      setTourn(next);
-      setMatchKey(k => k + 1);
+      setTourn(next); setMatchKey(k => k + 1);
       if (next.done) setScreen('results');
       setPicking(false);
     }, 160);
   }
 
-  /* ── TOURNAMENT SCREEN ── */
+  /* ── Loading splash ── */
+  if (authLoading) return (
+    <div style={{ minHeight: '100vh', background: 'linear-gradient(160deg, #06061a, #0d1b4b)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ textAlign: 'center', color: '#fff' }}>
+        <div style={{ fontSize: '2.5rem', marginBottom: 16 }}>🏅</div>
+        <Spinner size={28} color="#FCB131" />
+      </div>
+    </div>
+  );
+
+  /* ── Auth gate ── */
+  if (!user) return <AuthScreen />;
+
+  /* ── Tournament ── */
   if (screen === 'tournament' && tourn && !tourn.done && tourn.match) {
     const [a, b] = tourn.match;
     const total = items.length - 1;
     const maxRounds = Math.max(1, Math.ceil(Math.log2(items.length)));
     const pct = total > 0 ? (tourn.played / total) * 100 : 0;
-
     return (
       <div style={{ minHeight: '100vh', background: 'linear-gradient(160deg, #06061a 0%, #0d1b4b 55%, #1a062e 100%)', color: '#fff', fontFamily: 'inherit' }}>
         <div style={{ padding: '16px 24px', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
@@ -236,7 +337,6 @@ function App() {
             </div>
           </div>
         </div>
-
         <div style={{ maxWidth: 840, margin: '0 auto', padding: '28px 18px' }}>
           <p style={{ textAlign: 'center', color: 'rgba(255,255,255,0.6)', marginBottom: 22, fontSize: '0.95rem' }}>Which would you rather have?</p>
           <div key={matchKey} className="pop-in" style={{ display: 'flex', gap: 14, alignItems: 'stretch' }}>
@@ -246,7 +346,6 @@ function App() {
             </div>
             <VsCard item={b} onPick={() => !picking && onPick(1)} />
           </div>
-
           {tourn.losers.length > 0 && (
             <div className="fade-in" style={{ marginTop: 28, padding: '14px 16px', background: 'rgba(255,255,255,0.04)', borderRadius: 12, border: '1px solid rgba(255,255,255,0.07)' }}>
               <div style={{ fontSize: '0.66rem', color: 'rgba(255,255,255,0.35)', fontWeight: 700, letterSpacing: 2.5, textTransform: 'uppercase', marginBottom: 10 }}>Eliminated</div>
@@ -265,17 +364,12 @@ function App() {
     );
   }
 
-  /* ── RESULTS SCREEN ── */
+  /* ── Results ── */
   if (screen === 'results' && tourn?.done) {
     const ranked = getRanking(tourn);
-    const MEDALS = ['🥇', '🥈', '🥉'];
-    const PODIUM_H = [200, 162, 130];
-    const PODIUM_BG = [
-      'linear-gradient(180deg, #FFD700, #E5960C)',
-      'linear-gradient(180deg, #D8D8D8, #A0A0A0)',
-      'linear-gradient(180deg, #CD7F32, #955A1E)',
-    ];
-
+    const MEDALS = ['🥇','🥈','🥉'];
+    const PODIUM_H  = [200, 162, 130];
+    const PODIUM_BG = ['linear-gradient(180deg,#FFD700,#E5960C)','linear-gradient(180deg,#D8D8D8,#A0A0A0)','linear-gradient(180deg,#CD7F32,#955A1E)'];
     return (
       <div style={{ minHeight: '100vh', background: 'linear-gradient(180deg, #FFFBEB 0%, #f5f5f7 25%)', fontFamily: 'inherit' }}>
         <div style={{ maxWidth: 660, margin: '0 auto', padding: '36px 18px 40px' }}>
@@ -284,33 +378,25 @@ function App() {
             <h1 style={{ fontSize: '1.9rem', fontWeight: 900, color: '#111', letterSpacing: -0.5 }}>Tournament Complete!</h1>
             {ranked[0] && <p style={{ color: '#888', marginTop: 8, fontSize: '0.92rem' }}>"{ranked[0].name}" takes the gold! 🥇</p>}
           </div>
-
           {ranked.length >= 2 && (
             <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: 8, marginBottom: 36 }}>
-              {[1, 0, 2].map(rank => {
+              {[1,0,2].map(rank => {
                 if (!ranked[rank]) return <div key={rank} style={{ flex: 1, maxWidth: 190 }} />;
                 return (
                   <div key={rank} className="slide-up" style={{ flex: 1, maxWidth: 190, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                     <div style={{ marginBottom: 8 }}><Avatar item={ranked[rank]} size={54} /></div>
-                    <div style={{ fontWeight: 700, fontSize: '0.78rem', color: '#444', textAlign: 'center', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 8 }}>
-                      {ranked[rank].name}
-                    </div>
-                    <div style={{ width: '100%', height: PODIUM_H[rank], background: PODIUM_BG[rank], borderRadius: '10px 10px 0 0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2.2rem', boxShadow: '0 6px 20px rgba(0,0,0,0.14)' }}>
-                      {MEDALS[rank]}
-                    </div>
+                    <div style={{ fontWeight: 700, fontSize: '0.78rem', color: '#444', textAlign: 'center', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 8 }}>{ranked[rank].name}</div>
+                    <div style={{ width: '100%', height: PODIUM_H[rank], background: PODIUM_BG[rank], borderRadius: '10px 10px 0 0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2.2rem', boxShadow: '0 6px 20px rgba(0,0,0,0.14)' }}>{MEDALS[rank]}</div>
                   </div>
                 );
               })}
             </div>
           )}
-
           <div style={{ background: '#fff', borderRadius: 18, padding: '20px 22px', boxShadow: '0 4px 28px rgba(0,0,0,0.08)', marginBottom: 20 }}>
             <h3 style={{ fontSize: '0.88rem', fontWeight: 700, color: '#555', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 16 }}>Full Rankings</h3>
             {ranked.map((item, i) => (
               <div key={item.id} className="fade-in" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: i < ranked.length - 1 ? '1px solid #f3f3f3' : 'none' }}>
-                <div style={{ width: 32, textAlign: 'center', flexShrink: 0, fontWeight: 700, fontSize: i < 3 ? '1.25rem' : '0.82rem', color: i < 3 ? undefined : '#ccc' }}>
-                  {i < 3 ? MEDALS[i] : i + 1}
-                </div>
+                <div style={{ width: 32, textAlign: 'center', flexShrink: 0, fontWeight: 700, fontSize: i < 3 ? '1.25rem' : '0.82rem', color: i < 3 ? undefined : '#ccc' }}>{i < 3 ? MEDALS[i] : i + 1}</div>
                 <Avatar item={item} size={42} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 600, color: '#111', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.9rem' }}>{item.name}</div>
@@ -319,83 +405,79 @@ function App() {
               </div>
             ))}
           </div>
-
           <div style={{ display: 'flex', gap: 10 }}>
-            <button onClick={() => { setTourn(startTourn(items)); setMatchKey(0); setScreen('tournament'); }} style={{ flex: 1, padding: '13px', border: 'none', borderRadius: 12, cursor: 'pointer', background: 'linear-gradient(135deg, #0081C8, #00A651)', color: '#fff', fontWeight: 700, fontSize: '0.92rem' }}>
-              🔄 Rematch
-            </button>
-            <button onClick={() => setScreen('collection')} style={{ flex: 1, padding: '13px', border: 'none', borderRadius: 12, cursor: 'pointer', background: '#efefef', color: '#444', fontWeight: 700, fontSize: '0.92rem' }}>
-              ✏️ Edit Items
-            </button>
+            <button onClick={() => { setTourn(startTourn(items)); setMatchKey(0); setScreen('tournament'); }} style={{ flex: 1, padding: '13px', border: 'none', borderRadius: 12, cursor: 'pointer', background: 'linear-gradient(135deg, #0081C8, #00A651)', color: '#fff', fontWeight: 700, fontSize: '0.92rem' }}>🔄 Rematch</button>
+            <button onClick={() => setScreen('collection')} style={{ flex: 1, padding: '13px', border: 'none', borderRadius: 12, cursor: 'pointer', background: '#efefef', color: '#444', fontWeight: 700, fontSize: '0.92rem' }}>✏️ Edit Items</button>
           </div>
         </div>
       </div>
     );
   }
 
-  /* ── COLLECTION SCREEN ── */
+  /* ── Collection ── */
   return (
     <div style={{ minHeight: '100vh', background: '#f5f5f7', fontFamily: 'inherit' }}>
-      <div style={{ background: 'linear-gradient(135deg, #06061a 0%, #0d1b4b 60%, #0081C8 100%)', color: '#fff', padding: '28px 20px 34px', textAlign: 'center' }}>
-        <div style={{ fontSize: '2.6rem', marginBottom: 6 }}>🏅</div>
-        <h1 style={{ fontSize: '1.85rem', fontWeight: 900, letterSpacing: -0.5, marginBottom: 6 }}>Things I Want Olympics</h1>
-        <p style={{ opacity: 0.7, fontSize: '0.88rem' }}>Add things → battle them 1v1 → crown a champion</p>
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 7, marginTop: 18 }}>
-          {['#0081C8', '#FCB131', '#e8e8e8', '#00A651', '#EE334E'].map((c, i) => (
-            <div key={i} style={{ width: 21, height: 21, borderRadius: '50%', border: `3.5px solid ${c}`, opacity: 0.8 }} />
-          ))}
+      {/* Banner */}
+      <div style={{ background: 'linear-gradient(135deg, #06061a 0%, #0d1b4b 60%, #0081C8 100%)', color: '#fff', padding: '22px 20px 28px' }}>
+        <div style={{ maxWidth: 660, margin: '0 auto' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div style={{ textAlign: 'left' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: '1.9rem' }}>🏅</span>
+                <h1 style={{ fontSize: '1.5rem', fontWeight: 900, letterSpacing: -0.5 }}>Things Olympics</h1>
+              </div>
+              <p style={{ opacity: 0.6, fontSize: '0.82rem' }}>Signed in as {user.email}</p>
+            </div>
+            <button onClick={() => sb.auth.signOut()} style={{ padding: '7px 14px', background: 'rgba(255,255,255,0.12)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 9, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, flexShrink: 0, marginTop: 2 }}>
+              Sign out
+            </button>
+          </div>
+          <div style={{ display: 'flex', gap: 6, marginTop: 16 }}>
+            {['#0081C8','#FCB131','#e8e8e8','#00A651','#EE334E'].map((c,i) => (
+              <div key={i} style={{ width: 19, height: 19, borderRadius: '50%', border: `3px solid ${c}`, opacity: 0.8 }} />
+            ))}
+          </div>
         </div>
       </div>
 
-      <div style={{ maxWidth: 660, margin: '0 auto', padding: '22px 18px' }}>
-        <div style={{ background: '#fff', borderRadius: 18, padding: '22px', boxShadow: '0 2px 22px rgba(0,0,0,0.07)', marginBottom: 20 }}>
-          <h2 style={{ fontSize: '1rem', fontWeight: 700, color: '#222', marginBottom: 16 }}>➕ Add Competitors</h2>
-
-          <div style={{ display: 'flex', background: '#f3f4f6', borderRadius: 10, padding: 4, marginBottom: 18 }}>
-            {[['url', '🔗 From URL'], ['manual', '✏️ Manual Entry']].map(([key, label]) => (
-              <button key={key} onClick={() => { setTab(key); setFetchErr(''); setPreview(null); }} style={{
-                flex: 1, padding: '8px 10px', border: 'none', borderRadius: 8, cursor: 'pointer',
-                fontWeight: 600, fontSize: '0.85rem', transition: 'all 0.18s',
-                background: tab === key ? '#fff' : 'transparent',
-                color: tab === key ? '#0081C8' : '#888',
-                boxShadow: tab === key ? '0 2px 8px rgba(0,0,0,0.09)' : 'none',
-              }}>{label}</button>
+      <div style={{ maxWidth: 660, margin: '0 auto', padding: '20px 18px' }}>
+        {/* Add item card */}
+        <div style={{ background: '#fff', borderRadius: 18, padding: '20px', boxShadow: '0 2px 22px rgba(0,0,0,0.07)', marginBottom: 20 }}>
+          <h2 style={{ fontSize: '1rem', fontWeight: 700, color: '#222', marginBottom: 14 }}>➕ Add Competitors</h2>
+          <div style={{ display: 'flex', background: '#f3f4f6', borderRadius: 10, padding: 4, marginBottom: 16 }}>
+            {[['url','🔗 From URL'],['manual','✏️ Manual']].map(([key,label]) => (
+              <button key={key} onClick={() => { setTab(key); setFetchErr(''); setPreview(null); }} style={{ flex: 1, padding: '8px 10px', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem', transition: 'all 0.15s', background: tab === key ? '#fff' : 'transparent', color: tab === key ? '#0081C8' : '#888', boxShadow: tab === key ? '0 2px 8px rgba(0,0,0,0.09)' : 'none' }}>
+                {label}
+              </button>
             ))}
           </div>
 
           {tab === 'url' && (
             <div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <input
-                  value={urlVal}
-                  onChange={e => setUrlVal(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && onFetch()}
+                <input value={urlVal} onChange={e => setUrlVal(e.target.value)} onKeyDown={e => e.key === 'Enter' && onFetch()}
                   placeholder="Paste any URL (Amazon, Etsy, store page…)"
-                  style={{ flex: 1, padding: '10px 13px', border: '1.5px solid #e5e7eb', borderRadius: 10, fontSize: '0.88rem' }}
-                />
-                <button onClick={onFetch} disabled={fetching || !urlVal.trim()} style={{
-                  padding: '10px 16px', background: '#0081C8', color: '#fff', border: 'none', borderRadius: 10,
-                  fontWeight: 700, cursor: fetching || !urlVal.trim() ? 'not-allowed' : 'pointer',
-                  opacity: fetching || !urlVal.trim() ? 0.5 : 1, fontSize: '0.88rem', flexShrink: 0,
-                }}>
-                  {fetching ? '…' : 'Fetch'}
+                  style={{ flex: 1, padding: '10px 13px', border: '1.5px solid #e5e7eb', borderRadius: 10, fontSize: '0.88rem' }} />
+                <button onClick={onFetch} disabled={fetching || !urlVal.trim()} style={{ padding: '10px 14px', background: '#0081C8', color: '#fff', border: 'none', borderRadius: 10, fontWeight: 700, cursor: fetching || !urlVal.trim() ? 'not-allowed' : 'pointer', opacity: fetching || !urlVal.trim() ? 0.5 : 1, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {fetching ? <><Spinner size={14} color="#fff" /> Fetching</> : 'Fetch'}
                 </button>
               </div>
               {fetchErr && <p style={{ marginTop: 7, color: '#EE334E', fontSize: '0.8rem' }}>{fetchErr}</p>}
-              <p style={{ marginTop: 7, fontSize: '0.75rem', color: '#bbb' }}>Works with Amazon, Etsy, most product pages &amp; websites</p>
-
+              <p style={{ marginTop: 6, fontSize: '0.74rem', color: '#bbb' }}>Works with Amazon, Etsy, most product pages &amp; websites</p>
               {preview && (
                 <div className="pop-in" style={{ marginTop: 14, border: '1.5px solid #e5e7eb', borderRadius: 12, overflow: 'hidden' }}>
                   <div style={{ display: 'flex', gap: 12, padding: 14 }}>
-                    <Avatar item={preview} size={60} />
+                    <Avatar item={preview} size={58} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#111' }}>{preview.name}</div>
                       {preview.description && <div style={{ color: '#777', fontSize: '0.78rem', marginTop: 3, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{preview.description}</div>}
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: 8, padding: '0 14px 14px' }}>
-                    <button onClick={addPreview} style={{ flex: 1, padding: '9px', background: '#00A651', color: '#fff', border: 'none', borderRadius: 9, fontWeight: 700, cursor: 'pointer', fontSize: '0.86rem' }}>✓ Add to List</button>
-                    <button onClick={() => setPreview(null)} style={{ padding: '9px 13px', background: '#f3f4f6', border: 'none', borderRadius: 9, cursor: 'pointer', color: '#666', fontSize: '0.86rem' }}>✕</button>
+                    <button onClick={addPreview} disabled={saving} style={{ flex: 1, padding: '9px', background: '#00A651', color: '#fff', border: 'none', borderRadius: 9, fontWeight: 700, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, fontSize: '0.86rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                      {saving ? <><Spinner size={13} color="#fff" /> Saving…</> : '✓ Add to List'}
+                    </button>
+                    <button onClick={() => setPreview(null)} style={{ padding: '9px 13px', background: '#f3f4f6', border: 'none', borderRadius: 9, cursor: 'pointer', color: '#666' }}>✕</button>
                   </div>
                 </div>
               )}
@@ -404,34 +486,27 @@ function App() {
 
           {tab === 'manual' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-              {[['name', 'Name *'], ['image', 'Image URL (optional)'], ['description', 'Description (optional)'], ['url', 'Link (optional)']].map(([key, ph]) => (
-                <input
-                  key={key}
-                  value={form[key]}
-                  onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))}
+              {[['name','Name *'],['image','Image URL (optional)'],['description','Description (optional)'],['url','Link (optional)']].map(([key,ph]) => (
+                <input key={key} value={form[key]} onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))}
                   onKeyDown={e => key === 'url' && e.key === 'Enter' && addManual()}
-                  placeholder={ph}
-                  style={{ padding: '10px 13px', border: '1.5px solid #e5e7eb', borderRadius: 10, fontSize: '0.88rem' }}
-                />
+                  placeholder={ph} style={{ padding: '10px 13px', border: '1.5px solid #e5e7eb', borderRadius: 10, fontSize: '0.88rem' }} />
               ))}
-              <button onClick={addManual} disabled={!form.name.trim()} style={{
-                padding: '10px', background: '#0081C8', color: '#fff', border: 'none',
-                borderRadius: 10, fontWeight: 700, cursor: form.name.trim() ? 'pointer' : 'not-allowed',
-                opacity: form.name.trim() ? 1 : 0.5, fontSize: '0.9rem', marginTop: 2,
-              }}>
-                + Add Item
+              <button onClick={addManual} disabled={!form.name.trim() || saving} style={{ padding: '10px', background: '#0081C8', color: '#fff', border: 'none', borderRadius: 10, fontWeight: 700, cursor: !form.name.trim() || saving ? 'not-allowed' : 'pointer', opacity: !form.name.trim() || saving ? 0.5 : 1, fontSize: '0.9rem', marginTop: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                {saving ? <><Spinner size={14} color="#fff" /> Saving…</> : '+ Add Item'}
               </button>
             </div>
           )}
         </div>
 
-        {items.length > 0 ? (
+        {/* Items list */}
+        {itemsLoading ? (
+          <div style={{ textAlign: 'center', padding: '40px 0' }}><Spinner size={28} /></div>
+        ) : items.length > 0 ? (
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 13 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <h2 style={{ fontSize: '1rem', fontWeight: 700, color: '#222' }}>🎯 Competitors ({items.length})</h2>
               {items.length >= 2 && (
-                <button
-                  onClick={startTournament}
+                <button onClick={startTournament}
                   onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.04)'}
                   onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
                   style={{ padding: '9px 18px', background: 'linear-gradient(135deg, #FCB131, #EE334E)', color: '#fff', border: 'none', borderRadius: 11, fontWeight: 700, cursor: 'pointer', fontSize: '0.88rem', boxShadow: '0 4px 16px rgba(238,51,78,0.35)', transition: 'transform 0.15s' }}>
@@ -446,7 +521,7 @@ function App() {
                   <Avatar item={item} size={44} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600, color: '#111', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.88rem' }}>{item.name}</div>
-                    {item.url && <a href={item.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.7rem', color: '#0081C8', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{item.url.slice(0, 50)}{item.url.length > 50 ? '…' : ''}</a>}
+                    {item.url && <a href={item.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.7rem', color: '#0081C8', textDecoration: 'none', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.url.slice(0, 52)}{item.url.length > 52 ? '…' : ''}</a>}
                   </div>
                   <button onClick={() => removeItem(item.id)} style={{ width: 27, height: 27, borderRadius: '50%', background: '#fee2e2', color: '#EE334E', border: 'none', cursor: 'pointer', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '0.72rem' }}>✕</button>
                 </div>
@@ -460,8 +535,8 @@ function App() {
             <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#333', marginBottom: 6 }}>No competitors yet!</h3>
             <p style={{ color: '#999', fontSize: '0.85rem', marginBottom: 28 }}>Add things you want above to get started</p>
             <div style={{ display: 'flex', gap: 16, justifyContent: 'center', flexWrap: 'wrap' }}>
-              {[['➕', 'Add items', 'Paste links or type names'], ['⚔️', 'Battle 1v1', 'Pick your fave each round'], ['🏆', 'Crown winner', 'See the full ranking']].map(([emoji, title, desc]) => (
-                <div key={title} style={{ width: 140, textAlign: 'center' }}>
+              {[['➕','Add items','Paste links or type names'],['⚔️','Battle 1v1','Pick your fave each round'],['🏆','Crown winner','See the full ranking']].map(([emoji,title,desc]) => (
+                <div key={title} style={{ width: 130, textAlign: 'center' }}>
                   <div style={{ width: 42, height: 42, borderRadius: '50%', background: '#f3f4f6', margin: '0 auto 8px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.3rem' }}>{emoji}</div>
                   <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#333', marginBottom: 3 }}>{title}</div>
                   <div style={{ fontSize: '0.75rem', color: '#aaa' }}>{desc}</div>
